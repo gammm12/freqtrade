@@ -79,42 +79,85 @@ function updateenv() {
     REQUIREMENTS_FREQAI_RL=""
     REQUIREMENTS=requirements.txt
 
-    read -p "Do you want to install dependencies for development (Performs a full install with all dependencies) [y/N]? "
-    dev=$REPLY
-    if [[ $REPLY =~ ^[Yy]$ ]]
-    then
-        REQUIREMENTS=requirements-dev.txt
-    else
-        # requirements-dev.txt includes all the below requirements already, so further questions are pointless.
-        read -p "Do you want to install plotting dependencies (plotly) [y/N]? "
-        if [[ $REPLY =~ ^[Yy]$ ]]
-        then
-            REQUIREMENTS_PLOT="-r requirements-plot.txt"
-        fi
-        if [ "${SYS_ARCH}" == "armv7l" ] || [ "${SYS_ARCH}" == "armv6l" ]; then
-            echo "Detected Raspberry, installing cython, skipping hyperopt installation."
-            ${PYTHON} -m pip install --upgrade cython
+    # Non-interactive / env-driven setup
+    DEV_ENV="${FT_DEV:-}"
+    NON_INTERACTIVE=$(istrue "${FT_NON_INTERACTIVE:-0}" && echo 1 || echo 0)
+    WITH_PLOT=$(istrue "${FT_WITH_PLOT:-0}" && echo 1 || echo 0)
+    WITH_HYPEROPT=$(istrue "${FT_WITH_HYPEROPT:-0}" && echo 1 || echo 0)
+    WITH_FREQAI=$(istrue "${FT_WITH_FREQAI:-0}" && echo 1 || echo 0)
+    WITH_FREQAI_RL=$(istrue "${FT_WITH_FREQAI_RL:-0}" && echo 1 || echo 0)
+    SKIP_TALIB=$(istrue "${FT_SKIP_TALIB:-0}" && echo 1 || echo 0)
+    SKIP_UI=$(istrue "${FT_SKIP_UI:-0}" && echo 1 || echo 0)
+
+    if [ "$NON_INTERACTIVE" = "1" ] || [ -n "$DEV_ENV" ] || [ "$WITH_PLOT" = "1" ] || [ "$WITH_HYPEROPT" = "1" ] || [ "$WITH_FREQAI" = "1" ] || [ "$WITH_FREQAI_RL" = "1" ]; then
+        # Use env variables, do not prompt
+        if istrue "$DEV_ENV"; then
+            dev="y"
+            REQUIREMENTS=requirements-dev.txt
         else
-            # Is not Raspberry
-            read -p "Do you want to install hyperopt dependencies [y/N]? "
-            if [[ $REPLY =~ ^[Yy]$ ]]
-            then
-                REQUIREMENTS_HYPEROPT="-r requirements-hyperopt.txt"
+            dev="n"
+            if [ "$WITH_PLOT" = "1" ]; then
+                REQUIREMENTS_PLOT="-r requirements-plot.txt"
+            fi
+            if [ "${SYS_ARCH}" = "armv7l" ] || [ "${SYS_ARCH}" = "armv6l" ]; then
+                echo "Detected Raspberry, installing cython, skipping hyperopt installation."
+                ${PYTHON} -m pip install --upgrade cython
+            else
+                if [ "$WITH_HYPEROPT" = "1" ]; then
+                    REQUIREMENTS_HYPEROPT="-r requirements-hyperopt.txt"
+                fi
+            fi
+            if [ "$WITH_FREQAI_RL" = "1" ]; then
+                REQUIREMENTS_FREQAI="-r requirements-freqai-rl.txt"
+            elif [ "$WITH_FREQAI" = "1" ]; then
+                REQUIREMENTS_FREQAI="-r requirements-freqai.txt --use-pep517"
             fi
         fi
-
-        read -p "Do you want to install dependencies for freqai [y/N]? "
+    else
+        # Interactive prompts (default behavior)
+        read -p "Do you want to install dependencies for development (Performs a full install with all dependencies) [y/N]? "
+        dev=$REPLY
         if [[ $REPLY =~ ^[Yy]$ ]]
         then
-            REQUIREMENTS_FREQAI="-r requirements-freqai.txt --use-pep517"
-            read -p "Do you also want dependencies for freqai-rl or PyTorch (~700mb additional space required) [y/N]? "
+            REQUIREMENTS=requirements-dev.txt
+        else
+            # requirements-dev.txt includes all the below requirements already, so further questions are pointless.
+            read -p "Do you want to install plotting dependencies (plotly) [y/N]? "
             if [[ $REPLY =~ ^[Yy]$ ]]
             then
-                REQUIREMENTS_FREQAI="-r requirements-freqai-rl.txt"
+                REQUIREMENTS_PLOT="-r requirements-plot.txt"
+            fi
+            if [ "${SYS_ARCH}" == "armv7l" ] || [ "${SYS_ARCH}" == "armv6l" ]; then
+                echo "Detected Raspberry, installing cython, skipping hyperopt installation."
+                ${PYTHON} -m pip install --upgrade cython
+            else
+                # Is not Raspberry
+                read -p "Do you want to install hyperopt dependencies [y/N]? "
+                if [[ $REPLY =~ ^[Yy]$ ]]
+                then
+                    REQUIREMENTS_HYPEROPT="-r requirements-hyperopt.txt"
+                fi
+            fi
+
+            read -p "Do you want to install dependencies for freqai [y/N]? "
+            if [[ $REPLY =~ ^[Yy]$ ]]
+            then
+                REQUIREMENTS_FREQAI="-r requirements-freqai.txt --use-pep517"
+                read -p "Do you also want dependencies for freqai-rl or PyTorch (~700mb additional space required) [y/N]? "
+                if [[ $REPLY =~ ^[Yy]$ ]]
+                then
+                    REQUIREMENTS_FREQAI="-r requirements-freqai-rl.txt"
+                fi
             fi
         fi
     fi
-    install_talib
+
+    # Optionally install ta-lib
+    if [ "$SKIP_TALIB" != "1" ]; then
+        install_talib
+    else
+        echo "Skipping ta-lib installation (FT_SKIP_TALIB=1)"
+    fi
 
     ${PYTHON} -m pip install --upgrade -r ${REQUIREMENTS} ${REQUIREMENTS_HYPEROPT} ${REQUIREMENTS_PLOT} ${REQUIREMENTS_FREQAI} ${REQUIREMENTS_FREQAI_RL}
     if [ $? -ne 0 ]; then
