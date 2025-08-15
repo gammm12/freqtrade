@@ -28,7 +28,7 @@ function check_installed_python() {
     for v in 13 12 11
     do
         PYTHON="python3.${v}"
-        which $PYTHON
+        which $PYTHON >/dev/null 2>&1
         if [ $? -eq 0 ]; then
             echo "using ${PYTHON}"
             check_installed_pip
@@ -36,8 +36,31 @@ function check_installed_python() {
         fi
     done
 
+    # Fallback to python3 if it's >= 3.11
+    if command -v python3 >/dev/null 2>&1; then
+        PYTHON="python3"
+        VERSION_OK=$(${PYTHON} - <<'PYCHK'
+import sys
+print(int(sys.version_info >= (3,11)))
+PYCHK
+)
+        if [ "$VERSION_OK" = "1" ]; then
+            echo "using ${PYTHON}"
+            check_installed_pip
+            return
+        fi
+    fi
+
     echo "No usable python found. Please make sure to have python3.11 or newer installed."
     exit 1
+}
+
+# Helper: interpret truthy env values (1, true, yes, y)
+istrue() {
+    case "${1}" in
+        1|true|TRUE|yes|YES|y|Y) return 0;;
+        *) return 1;;
+    esac
 }
 
 function updateenv() {
@@ -105,16 +128,12 @@ function updateenv() {
     fi
 
     echo "Installing freqUI"
-    freqtrade install-ui
+    freqtrade install-ui || echo "freqUI install failed (non-fatal). You can run 'freqtrade install-ui' later."
 
     echo "pip install completed"
     echo
     if [[ $dev =~ ^[Yy]$ ]]; then
-        ${PYTHON} -m pre_commit install
-        if [ $? -ne 0 ]; then
-            echo "Failed installing pre-commit"
-            exit 1
-        fi
+        ${PYTHON} -m pre_commit install || echo "pre-commit installation failed (non-fatal)."
     fi
 }
 
@@ -282,6 +301,20 @@ function help() {
     echo "	-r,--reset      Hard reset your develop/stable branch."
     echo "	-c,--config     Easy config generator (Will override your existing file)."
     echo "	-p,--plot       Install dependencies for Plotting scripts."
+    echo
+    echo "Environment variables for non-interactive installs (optional):"
+    echo "  FT_NON_INTERACTIVE=1        Skip all prompts and use values below"
+    echo "  FT_DEV=1                    Install development dependencies (equivalent to answering 'y' to the first question)"
+    echo "  FT_WITH_PLOT=1              Include plotting dependencies"
+    echo "  FT_WITH_HYPEROPT=1          Include hyperopt dependencies"
+    echo "  FT_WITH_FREQAI=1            Include FreqAI dependencies"
+    echo "  FT_WITH_FREQAI_RL=1         Include FreqAI-RL/PyTorch dependencies (~700MB)"
+    echo "  FT_SKIP_TALIB=1             Skip ta-lib installation"
+    echo "  FT_SKIP_UI=1                Skip installing freqUI"
+    echo
+    echo "Examples:"
+    echo "  FT_NON_INTERACTIVE=1 FT_DEV=1 ./setup.sh -i"
+    echo "  FT_NON_INTERACTIVE=1 FT_WITH_PLOT=1 FT_WITH_HYPEROPT=1 ./setup.sh -i"
 }
 
 # Verify if 3.11+ is installed
