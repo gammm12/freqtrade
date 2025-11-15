@@ -28,7 +28,7 @@ function check_installed_python() {
     for v in 13 12 11
     do
         PYTHON="python3.${v}"
-        which $PYTHON
+        which $PYTHON >/dev/null 2>&1
         if [ $? -eq 0 ]; then
             echo "using ${PYTHON}"
             check_installed_pip
@@ -36,8 +36,31 @@ function check_installed_python() {
         fi
     done
 
+    # Fallback to python3 if it's >= 3.11
+    if command -v python3 >/dev/null 2>&1; then
+        PYTHON="python3"
+        VERSION_OK=$(${PYTHON} - <<'PYCHK'
+import sys
+print(int(sys.version_info >= (3,11)))
+PYCHK
+)
+        if [ "$VERSION_OK" = "1" ]; then
+            echo "using ${PYTHON}"
+            check_installed_pip
+            return
+        fi
+    fi
+
     echo "No usable python found. Please make sure to have python3.11 or newer installed."
     exit 1
+}
+
+# Helper: interpret truthy env values (1, true, yes, y)
+istrue() {
+    case "${1}" in
+        1|true|TRUE|yes|YES|y|Y) return 0;;
+        *) return 1;;
+    esac
 }
 
 function updateenv() {
@@ -56,42 +79,85 @@ function updateenv() {
     REQUIREMENTS_FREQAI_RL=""
     REQUIREMENTS=requirements.txt
 
-    read -p "Do you want to install dependencies for development (Performs a full install with all dependencies) [y/N]? "
-    dev=$REPLY
-    if [[ $REPLY =~ ^[Yy]$ ]]
-    then
-        REQUIREMENTS=requirements-dev.txt
-    else
-        # requirements-dev.txt includes all the below requirements already, so further questions are pointless.
-        read -p "Do you want to install plotting dependencies (plotly) [y/N]? "
-        if [[ $REPLY =~ ^[Yy]$ ]]
-        then
-            REQUIREMENTS_PLOT="-r requirements-plot.txt"
-        fi
-        if [ "${SYS_ARCH}" == "armv7l" ] || [ "${SYS_ARCH}" == "armv6l" ]; then
-            echo "Detected Raspberry, installing cython, skipping hyperopt installation."
-            ${PYTHON} -m pip install --upgrade cython
+    # Non-interactive / env-driven setup
+    DEV_ENV="${FT_DEV:-}"
+    NON_INTERACTIVE=$(istrue "${FT_NON_INTERACTIVE:-0}" && echo 1 || echo 0)
+    WITH_PLOT=$(istrue "${FT_WITH_PLOT:-0}" && echo 1 || echo 0)
+    WITH_HYPEROPT=$(istrue "${FT_WITH_HYPEROPT:-0}" && echo 1 || echo 0)
+    WITH_FREQAI=$(istrue "${FT_WITH_FREQAI:-0}" && echo 1 || echo 0)
+    WITH_FREQAI_RL=$(istrue "${FT_WITH_FREQAI_RL:-0}" && echo 1 || echo 0)
+    SKIP_TALIB=$(istrue "${FT_SKIP_TALIB:-0}" && echo 1 || echo 0)
+    SKIP_UI=$(istrue "${FT_SKIP_UI:-0}" && echo 1 || echo 0)
+
+    if [ "$NON_INTERACTIVE" = "1" ] || [ -n "$DEV_ENV" ] || [ "$WITH_PLOT" = "1" ] || [ "$WITH_HYPEROPT" = "1" ] || [ "$WITH_FREQAI" = "1" ] || [ "$WITH_FREQAI_RL" = "1" ]; then
+        # Use env variables, do not prompt
+        if istrue "$DEV_ENV"; then
+            dev="y"
+            REQUIREMENTS=requirements-dev.txt
         else
-            # Is not Raspberry
-            read -p "Do you want to install hyperopt dependencies [y/N]? "
-            if [[ $REPLY =~ ^[Yy]$ ]]
-            then
-                REQUIREMENTS_HYPEROPT="-r requirements-hyperopt.txt"
+            dev="n"
+            if [ "$WITH_PLOT" = "1" ]; then
+                REQUIREMENTS_PLOT="-r requirements-plot.txt"
+            fi
+            if [ "${SYS_ARCH}" = "armv7l" ] || [ "${SYS_ARCH}" = "armv6l" ]; then
+                echo "Detected Raspberry, installing cython, skipping hyperopt installation."
+                ${PYTHON} -m pip install --upgrade cython
+            else
+                if [ "$WITH_HYPEROPT" = "1" ]; then
+                    REQUIREMENTS_HYPEROPT="-r requirements-hyperopt.txt"
+                fi
+            fi
+            if [ "$WITH_FREQAI_RL" = "1" ]; then
+                REQUIREMENTS_FREQAI="-r requirements-freqai-rl.txt"
+            elif [ "$WITH_FREQAI" = "1" ]; then
+                REQUIREMENTS_FREQAI="-r requirements-freqai.txt --use-pep517"
             fi
         fi
-
-        read -p "Do you want to install dependencies for freqai [y/N]? "
+    else
+        # Interactive prompts (default behavior)
+        read -p "Do you want to install dependencies for development (Performs a full install with all dependencies) [y/N]? "
+        dev=$REPLY
         if [[ $REPLY =~ ^[Yy]$ ]]
         then
-            REQUIREMENTS_FREQAI="-r requirements-freqai.txt --use-pep517"
-            read -p "Do you also want dependencies for freqai-rl or PyTorch (~700mb additional space required) [y/N]? "
+            REQUIREMENTS=requirements-dev.txt
+        else
+            # requirements-dev.txt includes all the below requirements already, so further questions are pointless.
+            read -p "Do you want to install plotting dependencies (plotly) [y/N]? "
             if [[ $REPLY =~ ^[Yy]$ ]]
             then
-                REQUIREMENTS_FREQAI="-r requirements-freqai-rl.txt"
+                REQUIREMENTS_PLOT="-r requirements-plot.txt"
+            fi
+            if [ "${SYS_ARCH}" == "armv7l" ] || [ "${SYS_ARCH}" == "armv6l" ]; then
+                echo "Detected Raspberry, installing cython, skipping hyperopt installation."
+                ${PYTHON} -m pip install --upgrade cython
+            else
+                # Is not Raspberry
+                read -p "Do you want to install hyperopt dependencies [y/N]? "
+                if [[ $REPLY =~ ^[Yy]$ ]]
+                then
+                    REQUIREMENTS_HYPEROPT="-r requirements-hyperopt.txt"
+                fi
+            fi
+
+            read -p "Do you want to install dependencies for freqai [y/N]? "
+            if [[ $REPLY =~ ^[Yy]$ ]]
+            then
+                REQUIREMENTS_FREQAI="-r requirements-freqai.txt --use-pep517"
+                read -p "Do you also want dependencies for freqai-rl or PyTorch (~700mb additional space required) [y/N]? "
+                if [[ $REPLY =~ ^[Yy]$ ]]
+                then
+                    REQUIREMENTS_FREQAI="-r requirements-freqai-rl.txt"
+                fi
             fi
         fi
     fi
-    install_talib
+
+    # Optionally install ta-lib
+    if [ "$SKIP_TALIB" != "1" ]; then
+        install_talib
+    else
+        echo "Skipping ta-lib installation (FT_SKIP_TALIB=1)"
+    fi
 
     ${PYTHON} -m pip install --upgrade -r ${REQUIREMENTS} ${REQUIREMENTS_HYPEROPT} ${REQUIREMENTS_PLOT} ${REQUIREMENTS_FREQAI} ${REQUIREMENTS_FREQAI_RL}
     if [ $? -ne 0 ]; then
@@ -105,16 +171,12 @@ function updateenv() {
     fi
 
     echo "Installing freqUI"
-    freqtrade install-ui
+    freqtrade install-ui || echo "freqUI install failed (non-fatal). You can run 'freqtrade install-ui' later."
 
     echo "pip install completed"
     echo
     if [[ $dev =~ ^[Yy]$ ]]; then
-        ${PYTHON} -m pre_commit install
-        if [ $? -ne 0 ]; then
-            echo "Failed installing pre-commit"
-            exit 1
-        fi
+        ${PYTHON} -m pre_commit install || echo "pre-commit installation failed (non-fatal)."
     fi
 }
 
@@ -282,6 +344,20 @@ function help() {
     echo "	-r,--reset      Hard reset your develop/stable branch."
     echo "	-c,--config     Easy config generator (Will override your existing file)."
     echo "	-p,--plot       Install dependencies for Plotting scripts."
+    echo
+    echo "Environment variables for non-interactive installs (optional):"
+    echo "  FT_NON_INTERACTIVE=1        Skip all prompts and use values below"
+    echo "  FT_DEV=1                    Install development dependencies (equivalent to answering 'y' to the first question)"
+    echo "  FT_WITH_PLOT=1              Include plotting dependencies"
+    echo "  FT_WITH_HYPEROPT=1          Include hyperopt dependencies"
+    echo "  FT_WITH_FREQAI=1            Include FreqAI dependencies"
+    echo "  FT_WITH_FREQAI_RL=1         Include FreqAI-RL/PyTorch dependencies (~700MB)"
+    echo "  FT_SKIP_TALIB=1             Skip ta-lib installation"
+    echo "  FT_SKIP_UI=1                Skip installing freqUI"
+    echo
+    echo "Examples:"
+    echo "  FT_NON_INTERACTIVE=1 FT_DEV=1 ./setup.sh -i"
+    echo "  FT_NON_INTERACTIVE=1 FT_WITH_PLOT=1 FT_WITH_HYPEROPT=1 ./setup.sh -i"
 }
 
 # Verify if 3.11+ is installed
